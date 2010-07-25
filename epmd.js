@@ -1,6 +1,13 @@
 var net = require('net');
 var buffer = require('buffer');
 
+
+var HIDDEN = 72;
+var PROTOCOL = 0;
+var HIGHEST_VERSION = 5, LOWEST_VERSION = 5;
+var ALIVE2_REQ = 120;
+var ALIVE2_RESP = 121;
+
 var nodename = 'nodejs';
 
 // The max of any message we'll send is that for
@@ -9,9 +16,6 @@ var nodename = 'nodejs';
 // 120 	PortNo 	NodeType 	Protocol 	HighestVersion 	LowestVersion 	Nlen 	NodeName 	Elen 	Extra
 // = 2 + 11 + nodename.length + 2 (assuming no extra)
 var sendbuf = new buffer.Buffer(15 + nodename.length);
-
-// TODO we'll allocate recv buffers; better would be to pool them but
-// what the heck.
 
 var conn = net.createConnection(4369);
 
@@ -32,19 +36,17 @@ function writeString(buf, str, offset) {
     buf.write(str, offset, 'ascii');
 }
 
-var HIDDEN = 72;
-var PROTOCOL = 0;
-var HIGHEST_VERSION = 5, LOWEST_VERSION = 5;
-
-var port = 5555;
-
-function debug_req(buf, start, end) {
-    var str = '';
+function buf_to_string(buf, start, end) {
+    var str = '<<';
     for (var i=start; i < end; i++) {
         str += buf[i].toString();
-        str += ','
+        if (i < end - 1) str += ','
     }
-    console.log('Sending ' + str);
+    return str +'>>';
+}
+
+function debug_req(buf, start, end) {
+    console.log('Sending ' + buf_to_string(buf, start, end));
 }
 
 function send_req(buf, start, end) {
@@ -53,7 +55,7 @@ function send_req(buf, start, end) {
     conn.write(slice);
 }
 
-var ALIVE2_REQ = 120;
+var port = 5555;
 
 function send_alive2_req() {
     var length = 13 + nodename.length;
@@ -75,6 +77,6 @@ function send_alive2_req() {
 conn.on('connect', function() {
     send_alive2_req(conn);
     conn.on('data', function(data) {
-        console.log('Recieved ' + data);
+        console.log('Received ' + buf_to_string(data, 0, data.length));
     });
 });
