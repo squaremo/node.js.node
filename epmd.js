@@ -8,16 +8,36 @@ var HIGHEST_VERSION = 5, LOWEST_VERSION = 5;
 var ALIVE2_REQ = 120;
 var ALIVE2_RESP = 121;
 
-var nodename = 'nodejs';
+var EventEmitter = require('events').EventEmitter;
 
-// The max of any message we'll send is that for
-// ALIVE2_REQ:
-// 1  	2  	1  	1  	2  	2  	2  	Nlen  	2  	Elen
-// 120 	PortNo 	NodeType 	Protocol 	HighestVersion 	LowestVersion 	Nlen 	NodeName 	Elen 	Extra
-// = 2 + 11 + nodename.length + 2 (assuming no extra)
-var sendbuf = new buffer.Buffer(15 + nodename.length);
+function EPMD(args) {
 
-var conn = net.createConnection(4369);
+    //    EventEmitter.call(this);
+    this.host = args.host || "localhost";
+    this.port = args.port || 4369;
+}
+
+(function(E) {
+
+    var P = E.prototype;
+    
+    // kont :: epmd x node -> () ;; doesn't return
+    P.register = function(nodename, port, kont) {
+        // The max of any message we'll send is that for
+        // ALIVE2_REQ:
+        // 1  	2  	1  	1  	2  	2  	2  	Nlen  	2  	Elen
+        // 120 	PortNo 	NodeType 	Protocol 	HighestVersion 	LowestVersion 	Nlen 	NodeName 	Elen 	Extra
+        // = 2 + 11 + nodename.length + 2 (assuming no extra)
+        var sendbuf = new buffer.Buffer(15 + nodename.length);
+        var conn = this._connection = net.createConnection(this.port, this.host);
+        conn.on('connect', function() {
+            send_alive2_req(sendbuf, conn, nodename, port);
+        });
+        conn.on('data', function(data) {
+            console.log('Received ' + buf_to_string(data, 0, data.length));
+        });
+    }
+})(EPMD);
 
 function writeInt(buf, num, offset, size) {
     // always big-endian
@@ -49,15 +69,13 @@ function debug_req(buf, start, end) {
     console.log('Sending ' + buf_to_string(buf, start, end));
 }
 
-function send_req(buf, start, end) {
+function send_req(buf, conn, start, end) {
     debug_req(buf, start, end);
     var slice = buf.slice(start, end);
     conn.write(slice);
 }
 
-var port = 5555;
-
-function send_alive2_req() {
+function send_alive2_req(sendbuf, conn, nodename, port) {
     var length = 13 + nodename.length;
     writeLength(sendbuf, length);
     var offset = 2;
@@ -71,12 +89,7 @@ function send_alive2_req() {
     writeString(sendbuf, nodename, offset); offset += nodename.length;
     // no extra.  what would it be?
     writeInt(sendbuf, 0, offset, 2); offset +=2 ;
-    send_req(sendbuf, 0, offset);
+    send_req(sendbuf, conn, 0, offset);
 }
 
-conn.on('connect', function() {
-    send_alive2_req(conn);
-    conn.on('data', function(data) {
-        console.log('Received ' + buf_to_string(data, 0, data.length));
-    });
-});
+new EPMD({}).register('node1', 5555);
