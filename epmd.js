@@ -8,7 +8,15 @@ var HIGHEST_VERSION = 5, LOWEST_VERSION = 5;
 var ALIVE2_REQ = 120;
 var ALIVE2_RESP = 121;
 
-var EventEmitter = require('events').EventEmitter;
+var codec = require('./codec'),
+writeInt = codec.writeInt,
+writeString = codec.writeString,
+buf_to_string = codec.buf_to_string,
+readInt = codec.readInt;
+
+function debug(prefix, buf, start, end) {
+    console.log(prefix + ' ' + buf_to_string(buf, start, end));
+}
 
 function EPMD(host, port) {
 
@@ -43,34 +51,9 @@ function EPMD(host, port) {
     }
 })(EPMD);
 
-function writeInt(buf, num, offset, size) {
-    // always big-endian
-    for (var i = offset + size - 1; i >= offset; i--) {
-        buf[i] = num & 0xFF;
-        num >>= 8;
-    }
-}
-
 // Write the length of the req in the first two bytes
 function writeLength(buf, length) {
     writeInt(buf, length, 0, 2);
-}
-
-function writeString(buf, str, offset) {
-    buf.write(str, offset, 'ascii');
-}
-
-function buf_to_string(buf, start, end) {
-    var str = '<<';
-    for (var i=start; i < end; i++) {
-        str += buf[i].toString();
-        if (i < end - 1) str += ','
-    }
-    return str +'>>';
-}
-
-function debug(prefix, buf, start, end) {
-    console.log(prefix + ' ' + buf_to_string(buf, start, end));
 }
 
 function send_req(buf, conn, start, end) {
@@ -94,14 +77,6 @@ function send_alive2_req(sendbuf, conn, nodename, port) {
     // no extra.  what would it be?
     writeInt(sendbuf, 0, offset, 2); offset +=2 ;
     send_req(sendbuf, conn, 0, offset);
-}
-
-function readInt(buf, offset, size) {
-    var res = 0;
-    for (var i = 0; i < size; i++) {
-        res += buf[offset+i] << (size - i - 1) * 8;
-    }
-    return res;
 }
 
 function decode_resp(buf) {
