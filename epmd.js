@@ -2,7 +2,7 @@ var net = require('net');
 var buffer = require('buffer');
 
 
-var HIDDEN = 72;
+var NOT_HIDDEN = 77;
 var PROTOCOL = 0;
 var HIGHEST_VERSION = 5, LOWEST_VERSION = 5;
 var ALIVE2_REQ = 120;
@@ -10,18 +10,18 @@ var ALIVE2_RESP = 121;
 
 var EventEmitter = require('events').EventEmitter;
 
-function EPMD(args) {
+function EPMD(host, port) {
 
     //    EventEmitter.call(this);
-    this.host = args.host || "localhost";
-    this.port = args.port || 4369;
+    this.host = host || "localhost";
+    this.port = port || 4369;
 }
 
 (function(E) {
 
     var P = E.prototype;
     
-    // kont :: epmd x node -> () ;; doesn't return
+    // kont :: epmd x nodeArgs -> () ;; doesn't return
     P.register = function(nodename, port, kont) {
         // The max of any message we'll send is that for
         // ALIVE2_REQ:
@@ -34,7 +34,11 @@ function EPMD(args) {
             send_alive2_req(sendbuf, conn, nodename, port);
         });
         conn.on('data', function(data) {
-            console.log('Received ' + buf_to_string(data, 0, data.length));
+            var resp = decode_resp(data);
+            //assert(resp[0]=='alive2_resp');
+            //assert(resp[1]==0);
+            nodeArgs = {'creation': resp[2], 'name': nodename, 'port': port};
+            kont(this, nodeArgs);
         });
     }
 })(EPMD);
@@ -65,12 +69,12 @@ function buf_to_string(buf, start, end) {
     return str +'>>';
 }
 
-function debug_req(buf, start, end) {
-    console.log('Sending ' + buf_to_string(buf, start, end));
+function debug(prefix, buf, start, end) {
+    console.log(prefix + ' ' + buf_to_string(buf, start, end));
 }
 
 function send_req(buf, conn, start, end) {
-    debug_req(buf, start, end);
+    debug('Sending', buf, start, end);
     var slice = buf.slice(start, end);
     conn.write(slice);
 }
@@ -81,7 +85,7 @@ function send_alive2_req(sendbuf, conn, nodename, port) {
     var offset = 2;
     sendbuf[offset++] = ALIVE2_REQ;
     writeInt(sendbuf, port, offset, 2); offset +=2;
-    sendbuf[offset++] = HIDDEN;
+    sendbuf[offset++] = NOT_HIDDEN;
     sendbuf[offset++] = PROTOCOL;
     writeInt(sendbuf, HIGHEST_VERSION, offset, 2); offset += 2;
     writeInt(sendbuf, LOWEST_VERSION, offset, 2); offset += 2;
@@ -92,4 +96,30 @@ function send_alive2_req(sendbuf, conn, nodename, port) {
     send_req(sendbuf, conn, 0, offset);
 }
 
-new EPMD({}).register('node1', 5555);
+function readInt(buf, offset, size) {
+    var res = 0;
+    for (var i = 0; i < size; i++) {
+        res += buf[offset+i] << (size - i - 1) * 8;
+    }
+    return res;
+}
+
+function decode_resp(buf) {
+    debug('Recv', buf, 0, buf.length);
+    var respCode = readInt(buf, 0, 1);
+    switch (respCode) {
+    case ALIVE2_RESP:
+        var result = readInt(buf, 1, 1);
+        var creation = readInt(buf, 2, 2);
+        return ['alive2_resp', result, creation];
+    }
+}
+
+/*
+new EPMD({}).register('node1', 5555,
+                      function(epmd, args) {
+                          console.log(args.creation);
+                      });
+*/
+
+exports.EPMD = EPMD;
