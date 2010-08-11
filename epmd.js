@@ -8,7 +8,7 @@ var HIGHEST_VERSION = 5, LOWEST_VERSION = 5;
 var ALIVE2_REQ = 120;
 var ALIVE2_RESP = 121;
 
-var codec = require('./codec'),
+var codec = require('./etf'),
 writeInt = codec.writeInt,
 writeString = codec.writeString,
 buf_to_string = codec.buf_to_string,

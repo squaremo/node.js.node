@@ -4,7 +4,9 @@ var net = require('net');
 var EventEmitter = require('events').EventEmitter;
 var EPMD = require('./epmd').EPMD;
 
-function Node(nodename, port) {
+var buf_to_string = require('./etf').buf_to_string;
+
+function Dist(nodename, port) {
     
     EventEmitter.call(this);
     this._name = nodename;
@@ -12,8 +14,8 @@ function Node(nodename, port) {
 
 }
 
-(function(N) {
-    var P = N.prototype = new EventEmitter();
+(function(D) {
+    var P = D.prototype = new EventEmitter();
 
     P.create = function() {
         var epmd = new EPMD({});
@@ -36,16 +38,16 @@ function Node(nodename, port) {
                 dist.listen(node._port);
             });
     };
-}(Node));
+}(Dist));
 
 // DEMO
 
-var n = new Node('node3', 12345);
+var n = new Dist('node3', 12345);
 n.on('newConnection', function(stream) {
     console.log('New connection: ' + stream.remoteAddress);
 });
 n.on('data', function(stream, data) {
-    console.log('From ' + stream.remoteAddress +': ' + data);
+    console.log('From ' + stream.remoteAddress +': ' + buf_to_string(data));
 });
 n.on('endConnection', function(stream) {
     connnection.log('End connection: ' + stream.remoteAddress);
