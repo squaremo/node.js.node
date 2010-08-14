@@ -175,19 +175,18 @@ function parse_list(parser, kont) {
     }
     var count = readInt(parser._buf, 0, 4);
     parser._buf = parser._buf.slice(4, parser._buf.length);
-    if (count==0) { return kont([]) };
 
     function read_rest_k(count, accum) {
         debug("(count: "+count+"; accum:"+accum+")");
         return function(parser, val) {
-            if (count==1) {
-                accum.push(val);
+            if (count==0) {
+                accum.tl = val;
                 return accum;
             }
             else {
                 accum.push(val);
                 return parse_term(parser, read_rest_k(count-1, accum));
-            }
+            };
         }
     }
     parser._ks.push(kont);
@@ -195,8 +194,9 @@ function parse_list(parser, kont) {
 }
 
 function parse_term(parser, kont) {
+    debug(buf_to_string(parser._buf));
     if (parser._buf.length < 1) {
-        //debug("not even enough for a type");
+        debug("not even enough for a type: ");
         throw function(parser) {
             return parse_term(parser, kont);
         }
@@ -209,8 +209,10 @@ function parse_term(parser, kont) {
     case SMALL_INTEGER_EXT:
         return read_simple_or_throw(parser, 1, read_uint, kont);
     case NIL_EXT:
-        // just recurse, this will only be at the bottom of terms
-        return kont(parser, []);
+        // TODO just recurse? this will only be at the bottom of terms
+        debug("empty list");
+        parser._ks.push(kont);
+        return [];
     case LIST_EXT:
         return parse_list(parser, kont);
     }
@@ -224,29 +226,40 @@ var tp = new TermParser();
 var seven = new Buffer([97, 7]);
 tp.on('term', function(term) { console.log("Term: " + require('sys').inspect(term)); });
 
-tp.feed(seven);
+//tp.feed(seven);
 // -> Term: 7
 
 var eleven0 = new Buffer([97]);
 var eleven1 = new Buffer([11]);
-tp.feed(eleven0);
-tp.feed(eleven1);
+//tp.feed(eleven0);
+//tp.feed(eleven1);
 // -> Term : 11
 
-tp.feed(seven);
+//tp.feed(seven);
 // -> Term: 7
 
 var none = new Buffer([]);
-tp.feed(none);
-tp.feed(seven);
+//tp.feed(none);
+//tp.feed(seven);
 // -> Term: 7
 
-var listfivesixseven = new Buffer([108, 0, 0, 0, 3, 97, 5, 97, 6, 97, 7]); // FIXME tail
+var nil = new Buffer([106]);
+tp.feed(nil);
+// -> Term: []
+
+var listnone = new Buffer([108,0,0,0,0,106]);
+tp.feed(listnone);
+// -> Term: []
+
+var listfivesixseven = new Buffer([108, 0, 0, 0, 3, 97, 5, 97, 6, 97, 7, 106]); // FIXME tail
 tp.feed(listfivesixseven);
 // -> Term: [ 5, 6, 7 ]
 
 var listfivesix0 = new Buffer([108, 0, 0, 0, 2, 97]);
-var listfivesix1 = new Buffer([5, 97, 6]);
+var listfivesix1 = new Buffer([5, 97, 6, 106]);
 tp.feed(listfivesix0);
 tp.feed(listfivesix1);
 // -> Term: [ 5, 6 ]
+
+var improper = new Buffer([108, 0,0,0,1, 97,4, 97,5]);
+tp.feed(improper);
