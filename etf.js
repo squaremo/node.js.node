@@ -77,10 +77,15 @@ FUN_EXT = 117
 function TermParser() {
     EventEmitter.call(this);
     this._buf = null;
-    this._ks = [parse_term];
+    this._ks = [];
+    this._val = null;
 }
 
 var P = TermParser.prototype = new EventEmitter();
+
+P.emitTerm = function(value) {
+    this.emit('term', value);
+}
 
 P.feed = function(buffer) {
 
@@ -102,62 +107,83 @@ P.feed = function(buffer) {
         this._buf = buf;
     }
 
-    // The contract here is; if next can finish a whole term,
-    // it returns.  If it can't, it throws a continuation.
-    // So if we get a continuation, we have to wait for more data.
-    var next = this._ks.pop();
-    while (next) {
+    // kont :: parser x value -> value
+    // parse :: parser x kont -> value
+
+    function emitVal(parser, val) {
+        return parse_term(parser, function(parser, val) {
+            parser.emitTerm(val);
+            return null;
+        });
+    }
+
+    while (true) {
+        var next = this._ks.pop() || emitVal;
+        //console.log("Continuation: ");
+        //console.log(next.toString());
         try {
-            next(this);
+            var val = next(this, this._val);
+            //console.log("Value: " + val);
+            this._val = val;
         }
         catch (maybeKont) {
             if (typeof(maybeKont) == 'function') {
                 this._ks.push(maybeKont);
+                //console.log("thrown k");
                 return;
             }
             else {
                 throw maybeKont;
             }
         }
-        next = this._ks.pop();
     }
 }
 
-function parse_term(parser) {
-    var buf = parser._buf;
-    
-    if (buf.length < 1) {
-        throw parse_term;
-    }
-
-    var type = buf[0];
-    parser._buf = buf.slice(1, buf.length);
-
-    function parse_simple_or_throw(needed, parse_fun) {
-        function kont(parser) {
-            var buf = parser._buf;
-            parser._ks.push(parse_term);
-            var val = parse_fun(buf);
-            parser._buf = buf.slice(needed, buf.length);
-            parser.emit('term', val);
-        }
-
-        if (parser._buf.length < needed) {
-            throw kont;
-        }
-        else {
-            kont(parser);
+function read_simple_or_throw(parser, needed, read_fun, kont) {
+    if (parser._buf.length < needed) {
+        //console.log("not enough")
+        throw function(parser, val) {
+            return read_simple_or_throw(parser, needed, read_fun, kont);
         }
     }
-
-    function parse_uint(buf) {
-        return buf[0];
+    else {
+        parser._ks.push(kont);
+        var val = read_fun(parser._buf);
+        parser._buf = parser._buf.slice(needed, parser._buf.length);
+        return val;
     }
+}
+
+function read_uint(buf) {
+    return buf[0];
+}
+
+function parse_list(parser, kont) {
+    if (parser._buf.length < 4) {
+        throw parse_list;
+    }
+    var count = readInt(parser._buf, 0, 4);
+}
+
+function parse_term(parser, kont) {
+    if (parser._buf.length < 1) {
+        //console.log("not even enough for a type");
+        throw function(parser) {
+            return parse_term(parser, kont);
+        }
+    }
+
+    var type = parser._buf[0];
+    parser._buf = parser._buf.slice(1, parser._buf.length);
 
     switch (type) {
     case SMALL_INTEGER_EXT:
-        parse_simple_or_throw(1, parse_uint);
-        break;
+        return read_simple_or_throw(parser, 1, read_uint, kont);
+    case NIL_EXT:
+        // just recurse, this will only be at the bottom of terms
+        return kont(parser, []);
+    case LIST_EXT:
+        return parse_list();
     }
 }
 
@@ -167,13 +193,16 @@ exports.TermParser = TermParser;
 
 var tp = new TermParser();
 var seven = new Buffer([97, 7]);
-tp.on('term', function(term) { console.log("Term: " + term.toString()); });
+tp.on('term', function(term) { console.log("Term: " + term); });
 
 tp.feed(seven);
+// -> Term: 7
 
 var eleven0 = new Buffer([97]);
 var eleven1 = new Buffer([11]);
 tp.feed(eleven0);
 tp.feed(eleven1);
+// -> Term : 11
 
 tp.feed(seven);
+// -> Term: 7
