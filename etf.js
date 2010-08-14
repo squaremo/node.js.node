@@ -2,6 +2,14 @@
 
 // ** Utility functions
 
+var debug = function(str) {
+}
+if (process.env.DEBUG) {
+    debug = function(str) {
+        console.log(str);
+    }
+}
+
 function writeInt(buf, num, offset, size) {
     // always big-endian
     for (var i = offset + size - 1; i >= offset; i--) {
@@ -118,18 +126,19 @@ P.feed = function(buffer) {
     }
 
     while (true) {
+        debug("(stack depth: " + this._ks.length + ")");
         var next = this._ks.pop() || emitVal;
-        //console.log("Continuation: ");
-        //console.log(next.toString());
+        debug("Continuation: ");
+        debug(next.toString());
         try {
             var val = next(this, this._val);
-            //console.log("Value: " + val);
+            debug("Value: " + val);
             this._val = val;
         }
         catch (maybeKont) {
             if (typeof(maybeKont) == 'function') {
                 this._ks.push(maybeKont);
-                //console.log("thrown k");
+                debug("thrown k");
                 return;
             }
             else {
@@ -141,7 +150,7 @@ P.feed = function(buffer) {
 
 function read_simple_or_throw(parser, needed, read_fun, kont) {
     if (parser._buf.length < needed) {
-        //console.log("not enough")
+        //debug("not enough")
         throw function(parser, val) {
             return read_simple_or_throw(parser, needed, read_fun, kont);
         }
@@ -160,14 +169,34 @@ function read_uint(buf) {
 
 function parse_list(parser, kont) {
     if (parser._buf.length < 4) {
-        throw parse_list;
+        throw function(parser, val) {
+            return parse_list(parser, kont);
+        }
     }
     var count = readInt(parser._buf, 0, 4);
+    parser._buf = parser._buf.slice(4, parser._buf.length);
+    if (count==0) { return kont([]) };
+
+    function read_rest_k(count, accum) {
+        debug("(count: "+count+"; accum:"+accum+")");
+        return function(parser, val) {
+            if (count==1) {
+                accum.push(val);
+                return accum;
+            }
+            else {
+                accum.push(val);
+                return parse_term(parser, read_rest_k(count-1, accum));
+            }
+        }
+    }
+    parser._ks.push(kont);
+    return parse_term(parser, read_rest_k(count, []));
 }
 
 function parse_term(parser, kont) {
     if (parser._buf.length < 1) {
-        //console.log("not even enough for a type");
+        //debug("not even enough for a type");
         throw function(parser) {
             return parse_term(parser, kont);
         }
@@ -183,7 +212,7 @@ function parse_term(parser, kont) {
         // just recurse, this will only be at the bottom of terms
         return kont(parser, []);
     case LIST_EXT:
-        return parse_list();
+        return parse_list(parser, kont);
     }
 }
 
@@ -193,7 +222,7 @@ exports.TermParser = TermParser;
 
 var tp = new TermParser();
 var seven = new Buffer([97, 7]);
-tp.on('term', function(term) { console.log("Term: " + term); });
+tp.on('term', function(term) { console.log("Term: " + require('sys').inspect(term)); });
 
 tp.feed(seven);
 // -> Term: 7
@@ -206,3 +235,18 @@ tp.feed(eleven1);
 
 tp.feed(seven);
 // -> Term: 7
+
+var none = new Buffer([]);
+tp.feed(none);
+tp.feed(seven);
+// -> Term: 7
+
+var listfivesixseven = new Buffer([108, 0, 0, 0, 3, 97, 5, 97, 6, 97, 7]); // FIXME tail
+tp.feed(listfivesixseven);
+// -> Term: [ 5, 6, 7 ]
+
+var listfivesix0 = new Buffer([108, 0, 0, 0, 2, 97]);
+var listfivesix1 = new Buffer([5, 97, 6]);
+tp.feed(listfivesix0);
+tp.feed(listfivesix1);
+// -> Term: [ 5, 6 ]
