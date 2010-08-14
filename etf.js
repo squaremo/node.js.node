@@ -215,6 +215,50 @@ function parse_list(parser, kont) {
     return parse_term(parser, read_rest_k(count, []));
 }
 
+function parse_tuple(sizeSize, parser, kont) {
+    if (parser.available() < sizeSize) {
+        throw function(parser, val) {
+            return parse_tuple(sizeSize, parser, kont);
+        }
+    }
+    var size = readInt(parser.buf(), 0, sizeSize);
+    parser.advance(sizeSize);
+
+    if (size==0) {
+        return kont({'tuple': [], 'length': 0});
+    }
+    
+    function read_rest_k(count, accum) {
+        debug("(count: "+count+"; accum:"+accum+")");
+        return function(parser, val) {
+            if (count==1) {
+                accum.push(val);
+                return {'tuple': accum, 'length': size};
+            }
+            else {
+                accum.push(val);
+                return parse_term(parser, read_rest_k(count-1, accum));
+            };
+        }
+    }
+    parser.push(kont);
+    return parse_term(parser, read_rest_k(size, []));
+}
+
+function parse_byte_sized(parser, sizeSize, read_fun, kont) {
+    if (parser.available() < sizeSize) {
+        throw function(parser, val) {
+            parse_byte_sized(parser, sizeSize, read_fun, kont);
+        }
+    }
+    var size = readInt(parser.buf(), 0, sizeSize);
+    parser.advance(sizeSize);
+
+    return read_simple_or_throw(parser, size, function(buf) {
+        return read_fun(buf.slice(0, size));
+    }, kont);
+}
+
 function parse_term(parser, kont) {
     debug(buf_to_string(parser.buf()));
     if (parser.available() < 1) {
@@ -237,6 +281,16 @@ function parse_term(parser, kont) {
         return kont(parser, []);
     case LIST_EXT:
         return parse_list(parser, kont);
+    case SMALL_TUPLE_EXT:
+        return parse_tuple(1, parser, kont);
+    case LARGE_TUPLE_EXT:
+        return parse_tuple(4, parser, kont);
+    case STRING_EXT:
+        return parse_byte_sized(parser, 2, function(x){return x}, kont);
+    case ATOM_EXT:
+        debug("atom");
+        return parse_byte_sized(parser, 2,
+                               function(x){return x.toString()}, kont);
     }
 }
 
@@ -245,8 +299,10 @@ exports.TermParser = TermParser;
 /* Demo */
 
 var tp = new TermParser();
-var seven = new Buffer([97, 7]);
 tp.on('term', function(term) { console.log("Term: " + require('sys').inspect(term)); });
+
+
+var seven = new Buffer([97, 7]);
 
 tp.feed(seven);
 // -> Term: 7
@@ -285,3 +341,36 @@ tp.feed(listfivesix1);
 
 var improper = new Buffer([108, 0,0,0,1, 97,4, 97,5]);
 tp.feed(improper);
+// -> Term: [4, tl: 5]
+
+var nested = new Buffer([108, 0,0,0,2, 97,6, 108, 0,0,0,1, 97,7, 106, 106]);
+tp.feed(nested);
+// -> Term: [6, [7]]
+
+// Tuples
+var small = new Buffer([104, 3, 97,1, 97,2, 97,3]);
+tp.feed(small);
+// -> Term: {tuple: [1, 2, 3], length: 3}
+
+var large = new Buffer([105, 0,0,0,3, 97,1, 97,2, 97,3]);
+tp.feed(large);
+// -> Term {tuple: [1,2,3], length: 3}
+
+// Strings
+var msg = "Hello World!";
+var short = new Buffer(3 + Buffer.byteLength(msg));
+short[0] = 107; short[1] = 0; short[2] = Buffer.byteLength(msg);
+new Buffer(msg).copy(short, 3, 0);
+tp.feed(short);
+// -> Term: <buffer with bytes encoding "Hello World!">>
+
+var short0 = short.slice(0, 6);
+var short1 = short.slice(6, short.length);
+tp.feed(short0);
+tp.feed(short1);
+// -> Term: as above
+
+// Atoms
+var atomatom = new Buffer([100,0,11,104,101,108,108,111,95,119,111,114,108,100]);
+tp.feed(atomatom);
+// -> Term: 'hello world'
