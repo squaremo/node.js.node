@@ -9,10 +9,10 @@ var ALIVE2_REQ = 120;
 var ALIVE2_RESP = 121;
 
 var codec = require('./etf'),
-writeInt = codec.writeInt,
-writeString = codec.writeString,
+write_int = codec.write_int,
+write_string = codec.write_string,
 buf_to_string = codec.buf_to_string,
-readInt = codec.readInt;
+read_int = codec.read_int;
 
 function debug(prefix, buf, start, end) {
     console.log(prefix + ' ' + buf_to_string(buf, start, end));
@@ -53,7 +53,7 @@ function EPMD(host, port) {
 
 // Write the length of the req in the first two bytes
 function writeLength(buf, length) {
-    writeInt(buf, length, 0, 2);
+    write_int(buf, length, 0, 2);
 }
 
 function send_req(buf, conn, start, end) {
@@ -67,25 +67,25 @@ function send_alive2_req(sendbuf, conn, nodename, port) {
     writeLength(sendbuf, length);
     var offset = 2;
     sendbuf[offset++] = ALIVE2_REQ;
-    writeInt(sendbuf, port, offset, 2); offset +=2;
+    write_int(sendbuf, port, offset, 2); offset +=2;
     sendbuf[offset++] = NOT_HIDDEN;
     sendbuf[offset++] = PROTOCOL;
-    writeInt(sendbuf, HIGHEST_VERSION, offset, 2); offset += 2;
-    writeInt(sendbuf, LOWEST_VERSION, offset, 2); offset += 2;
-    writeInt(sendbuf, nodename.length, offset, 2); offset += 2;
-    writeString(sendbuf, nodename, offset); offset += nodename.length;
+    write_int(sendbuf, HIGHEST_VERSION, offset, 2); offset += 2;
+    write_int(sendbuf, LOWEST_VERSION, offset, 2); offset += 2;
+    write_int(sendbuf, nodename.length, offset, 2); offset += 2;
+    write_string(sendbuf, nodename, offset); offset += nodename.length;
     // no extra.  what would it be?
-    writeInt(sendbuf, 0, offset, 2); offset +=2 ;
+    write_int(sendbuf, 0, offset, 2); offset +=2 ;
     send_req(sendbuf, conn, 0, offset);
 }
 
 function decode_resp(buf) {
     debug('Recv', buf, 0, buf.length);
-    var respCode = readInt(buf, 0, 1);
+    var respCode = read_int(buf, 0, 1);
     switch (respCode) {
     case ALIVE2_RESP:
-        var result = readInt(buf, 1, 1);
-        var creation = readInt(buf, 2, 2);
+        var result = read_int(buf, 1, 1);
+        var creation = read_int(buf, 2, 2);
         return ['alive2_resp', result, creation];
     }
 }

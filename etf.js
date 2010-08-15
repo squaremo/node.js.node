@@ -10,7 +10,7 @@ if (process.env.DEBUG) {
     }
 }
 
-function writeInt(buf, num, offset, size) {
+function write_int(buf, num, offset, size) {
     // always big-endian
     for (var i = offset + size - 1; i >= offset; i--) {
         buf[i] = num & 0xFF;
@@ -18,7 +18,7 @@ function writeInt(buf, num, offset, size) {
     }
 }
 
-function writeString(buf, str, offset) {
+function write_string(buf, str, offset) {
     buf.write(str, offset, 'ascii');
 }
 
@@ -33,7 +33,7 @@ function buf_to_string(buf, start, end) {
     return str +'>>';
 }
 
-function readInt(buf, offset, size) {
+function read_int(buf, offset, size) {
     var res = 0;
     for (var i = 0; i < size; i++) {
         res += buf[offset+i] << (size - i - 1) * 8;
@@ -41,10 +41,11 @@ function readInt(buf, offset, size) {
     return res;
 }
 
-exports.writeInt = writeInt;
-exports.writeString = writeString;
+// Handy elsewhere
+exports.write_int = write_int;
+exports.write_string = write_string;
 exports.buf_to_string = buf_to_string;
-exports.readInt = readInt;
+exports.read_int = read_int;
 
 // ** Parser
 
@@ -197,7 +198,7 @@ function read_uint8(buf) {
 }
 
 function read_uint32(buf) {
-    return readInt(buf, 0, 4);
+    return read_int(buf, 0, 4);
 }
 
 function read_float(buf) {
@@ -217,7 +218,7 @@ function parse_noded(parser, size, read_func, kont) {
 function parse_reference(parser, kont) {
     return parse_noded(parser, 5, function(node, buf) {
         var id = read_uint32(buf, 0, 4);
-        var creation = readInt(buf, 4, 1);
+        var creation = read_int(buf, 4, 1);
         return {'ref': {'node': node, 'id': id, 'creation': creation}};
     }, kont);
 }
@@ -225,16 +226,16 @@ function parse_reference(parser, kont) {
 function parse_port(parser, kont) {
     return parse_noded(parser, 5, function(node, buf) {
         var id = read_uint32(buf, 0, 4);
-        var creation = readInt(buf, 4, 1);
+        var creation = read_int(buf, 4, 1);
         return {'port': {'node': node, 'id': id, 'creation': creation}};
     }, kont);
 }
 
 function parse_pid(parser, kont) {
     return parse_noded(parser, 9, function(node, buf) {
-        var id = readInt(buf, 0, 4);
-        var serial = readInt(buf, 4, 4);
-        var creation = readInt(buf, 8, 1);
+        var id = read_int(buf, 0, 4);
+        var serial = read_int(buf, 4, 4);
+        var creation = read_int(buf, 8, 1);
         return {'pid': {'node': node, 'id': id,
                         'serial': serial, 'creation': creation}};
     }, kont);
@@ -246,7 +247,7 @@ function parse_list(parser, kont) {
             return parse_list(parser, kont);
         }
     }
-    var count = readInt(parser.buf(), 0, 4);
+    var count = read_int(parser.buf(), 0, 4);
     parser.advance(4);
 
     function read_rest_k(count, accum) {
@@ -272,7 +273,7 @@ function parse_tuple(sizeSize, parser, kont) {
             return parse_tuple(sizeSize, parser, kont);
         }
     }
-    var size = readInt(parser.buf(), 0, sizeSize);
+    var size = read_int(parser.buf(), 0, sizeSize);
     parser.advance(sizeSize);
 
     if (size==0) {
@@ -302,7 +303,7 @@ function parse_byte_sized(parser, sizeSize, read_fun, kont) {
             parse_byte_sized(parser, sizeSize, read_fun, kont);
         }
     }
-    var size = readInt(parser.buf(), 0, sizeSize);
+    var size = read_int(parser.buf(), 0, sizeSize);
     parser.advance(sizeSize);
 
     return read_simple_or_throw(parser, size, function(buf) {
@@ -316,8 +317,8 @@ function parse_bignum(parser, sizeSize, kont) {
             parse_bignum(parser, sizeSize, kont);
         }
     }
-    var size = readInt(parser.buf(), 0, sizeSize);
-    var sign = readInt(parser.buf(), sizeSize, 1);
+    var size = read_int(parser.buf(), 0, sizeSize);
+    var sign = read_int(parser.buf(), sizeSize, 1);
     parser.advance(sizeSize + 1);
     
     return read_simple_or_throw(parser, size, function(buf) {
@@ -336,14 +337,14 @@ function parse_new_ref(parser, kont) {
             parse_new_ref(parser, kont);
         }
     }
-    var len = readInt(parser.buf(), 0, 2);
+    var len = read_int(parser.buf(), 0, 2);
     var idSize = 4*len;
     debug("newref idsize: "+idSize);
     parser.advance(2);
     return parse_term(parser, function(parser, node) {
         function read_rest(buf) {
             var creation = read_uint8(parser.buf());
-            var id = readInt(parser.buf(), 1, idSize);
+            var id = read_int(parser.buf(), 1, idSize);
             return {'ref': {'node': node, 'id': id, 'creation': creation}};
         }
         return read_simple_or_throw(parser, idSize+1, read_rest, kont);
