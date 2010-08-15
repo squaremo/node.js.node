@@ -185,8 +185,52 @@ function read_simple_or_throw(parser, needed, read_fun, kont) {
     }
 }
 
-function read_uint(buf) {
+function read_uint8(buf) {
     return buf[0];
+}
+
+function read_uint32(buf) {
+    return readInt(buf, 0, 4);
+}
+
+function read_float(buf) {
+    // FIXME sketchy
+    var rep = buf.toString('ascii', 0, 31);
+    return parseFloat(rep);
+}
+
+function parse_noded(parser, size, read_func, kont) {
+    return parse_term(parser, function(parser, val) {
+        return read_simple_or_throw(parser, size, function(buf) {
+            return read_func(val, buf);
+        }, kont);
+    });
+}
+
+function parse_reference(parser, kont) {
+    return parse_noded(parser, 5, function(node, buf) {
+        var id = read_uint32(buf, 0, 4);
+        var creation = readInt(buf, 4, 1);
+        return {'ref': {'node': node, 'id': id, 'creation': creation}};
+    }, kont);
+}
+
+function parse_port(parser, kont) {
+    return parse_noded(parser, 5, function(node, buf) {
+        var id = read_uint32(buf, 0, 4);
+        var creation = readInt(buf, 4, 1);
+        return {'port': {'node': node, 'id': id, 'creation': creation}};
+    }, kont);
+}
+
+function parse_pid(parser, kont) {
+    return parse_noded(parser, 9, function(node, buf) {
+        var id = readInt(buf, 0, 4);
+        var serial = readInt(buf, 4, 4);
+        var creation = readInt(buf, 8, 1);
+        return {'pid': {'node': node, 'id': id,
+                        'serial': serial, 'creation': creation}};
+    }, kont);
 }
 
 function parse_list(parser, kont) {
@@ -259,8 +303,48 @@ function parse_byte_sized(parser, sizeSize, read_fun, kont) {
     }, kont);
 }
 
+function parse_bignum(parser, sizeSize, kont) {
+    if (parser.available() < sizeSize + 1) { // the 1 is the sign
+        throw function(parser, val) {
+            parse_bignum(parser, sizeSize, kont);
+        }
+    }
+    var size = readInt(parser.buf(), 0, sizeSize);
+    var sign = readInt(parser.buf(), sizeSize, 1);
+    parser.advance(sizeSize + 1);
+    
+    return read_simple_or_throw(parser, size, function(buf) {
+        var num = 0;
+        for (var i=0; i < size; i++) {
+            num |= (buf[i] << (8 * i));
+        }
+        return (sign==0) ? num : -num;
+    }, kont);
+}
+
+function parse_new_ref(parser, kont) {
+    //    (1) 2 N 1 4*Len
+    if (parser.available() < 2) {
+        throw function(parser, val) {
+            parse_new_ref(parser, kont);
+        }
+    }
+    var len = readInt(parser.buf(), 0, 2);
+    var idSize = 4*len;
+    debug("newref idsize: "+idSize);
+    parser.advance(2);
+    return parse_term(parser, function(parser, node) {
+        function read_rest(buf) {
+            var creation = read_uint8(parser.buf());
+            var id = readInt(parser.buf(), 1, idSize);
+            return {'ref': {'node': node, 'id': id, 'creation': creation}};
+        }
+        return read_simple_or_throw(parser, idSize+1, read_rest, kont);
+    });
+}
+
 function parse_term(parser, kont) {
-    debug(buf_to_string(parser.buf()));
+    debug("In buffer: "+buf_to_string(parser.buf()));
     if (parser.available() < 1) {
         debug("not even enough for a type: ");
         throw function(parser) {
@@ -273,24 +357,50 @@ function parse_term(parser, kont) {
 
     switch (type) {
     case SMALL_INTEGER_EXT:
-        return read_simple_or_throw(parser, 1, read_uint, kont);
-    case NIL_EXT:
-        // just call the continuation.
-        // this will only be at the bottom of terms.
-        debug("empty list");
-        return kont(parser, []);
-    case LIST_EXT:
-        return parse_list(parser, kont);
+        return read_simple_or_throw(parser, 1, read_uint8, kont);
+    case INTEGER_EXT:
+        return read_simple_or_throw(parser, 4, read_uint32, kont);
+    case FLOAT_EXT:
+        return read_simple_or_throw(parser, 31, read_float, kont);
+    case ATOM_EXT:
+        return parse_byte_sized(parser, 2,
+                               function(x){return x.toString()}, kont);
+    case REFERENCE_EXT:
+        return parse_reference(parser, kont);
+    case PORT_EXT:
+        return parse_port(parser, kont);
+    case PID_EXT:
+        return parse_pid(parser, kont);
     case SMALL_TUPLE_EXT:
         return parse_tuple(1, parser, kont);
     case LARGE_TUPLE_EXT:
         return parse_tuple(4, parser, kont);
+    case NIL_EXT:
+        // just call the continuation.
+        // this will only be at the bottom of terms.
+        return kont(parser, []);
     case STRING_EXT:
         return parse_byte_sized(parser, 2, function(x){return x}, kont);
+    case LIST_EXT:
+        return parse_list(parser, kont);
+    case BINARY_EXT:
+        return parse_byte_sized(parser, 4, function(x){return x}, kont);
+    case SMALL_BIG_EXT:
+        return parse_bignum(parser, 1, kont);
+    case LARGE_BIG_EXT:
+        return parse_bignum(parser, 4, kont);
+    case NEW_REFERENCE_EXT:
+        return parse_new_ref(parser, kont);
+    case SMALL_ATOM_EXT:
     case ATOM_EXT:
-        debug("atom");
-        return parse_byte_sized(parser, 2,
+        return parse_byte_sized(parser, 1,
                                function(x){return x.toString()}, kont);
+    case FUN_EXT:
+    case NEW_FUN_EXT:
+    case EXPORT_EXT:
+    case BIT_BINARY_EXT:
+    case NEW_FLOAT_EXT:
+        throw "Unimplemented";
     }
 }
 
@@ -300,7 +410,6 @@ exports.TermParser = TermParser;
 
 var tp = new TermParser();
 tp.on('term', function(term) { console.log("Term: " + require('sys').inspect(term)); });
-
 
 var seven = new Buffer([97, 7]);
 
@@ -315,6 +424,15 @@ tp.feed(eleven1);
 
 tp.feed(seven);
 // -> Term: 7
+
+var bigint = new Buffer([98, 0,0,1,44]);
+tp.feed(bigint);
+// -> Term: 300
+
+var float = new Buffer([99, 49,46,50,51,52,53,54,48,48,48,48,48,48,48,48,48,
+                        48,48,51,48,55,48,101,43,48,50,0,0,0,0,0]);
+tp.feed(float);
+// -> Term: 123.456
 
 var none = new Buffer([]);
 tp.feed(none);
@@ -371,6 +489,51 @@ tp.feed(short1);
 // -> Term: as above
 
 // Atoms
-var atomatom = new Buffer([100,0,11,104,101,108,108,111,95,119,111,114,108,100]);
+var atomatom = new Buffer([100,0,11, 104,101,108,108,111,95,119,111,114,108,100]);
 tp.feed(atomatom);
 // -> Term: 'hello world'
+
+var smallatom = new Buffer([115, 11, 104,101,108,108,111,95,119,111,114,108,100])
+tp.feed(smallatom);
+// -> Term: 'hello world'
+
+// Reference, Port, Pid
+// NB the ID has restrictions on which bits can
+// be set; I'm ignoring them for now.
+var ref = new Buffer([101, 100,0,5,104,101,108,108,111, 0,0,1,44, 1]);
+tp.feed(ref);
+// -> Term: {'ref': {'node': 'hello', 'id': 300, 'creation': 1}}
+
+var port = new Buffer([102, 100,0,5,104,101,108,108,111, 0,0,1,44, 1]);
+tp.feed(port);
+// -> Term: {'port': {'node': 'hello', 'id': 300, 'creation': 1}}
+
+var pid = new Buffer([103, 100,0,5,104,101,108,108,111, 0,0,1,44, 0,0,1,45, 1]);
+tp.feed(pid);
+// -> Term: {'pid': {'node': 'hello', 'id': 300, 'serial': 301, 'creation': 1}}
+
+var newref = new Buffer([114, 0,2,  100,0,5,104,101,108,108,111, 3, 0,0,0,0,0,0,1,44]);
+tp.feed(newref);
+// -> Term: {'ref': {'node': 'hello', 'id': 300, 'creation': 3}}
+
+// Binary
+
+var binary = new Buffer(23);
+binary[0] = 109; binary[1] =0; binary[2] = 0; binary[3] = 0; binary[4] = 18;
+for (var i = 0; i < 18; i++) binary[i+5] = i;
+debug('Binary: ' + require('sys').inspect(binary));
+tp.feed(binary.slice(0, 10));
+tp.feed(binary.slice(10, 15));
+tp.feed(binary.slice(15, 23));
+// -> Term: <binary>
+
+// bignums
+// NB small-endian
+
+var smallbig = new Buffer([110, 4, 0, 12,0,0,0]);
+tp.feed(smallbig);
+// -> Term: 12
+
+var largebig = new Buffer([111, 0,0,0,4, 1, 12,0,0,0]);
+tp.feed(largebig);
+// -> Term: -12
