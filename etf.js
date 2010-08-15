@@ -89,86 +89,93 @@ function TermParser() {
     this._val = null;
 }
 
-var P = TermParser.prototype = new EventEmitter();
-
-P.emitTerm = function(value) {
-    this.emit('term', value);
-}
-
-P.advance = function(numBytes) {
-    this._buf = this._buf.slice(numBytes, this._buf.length);
-}
-
-P.available = function() {
-    return this._buf.length;
-}
-
-P.push = function(k) {
-    this._ks.push(k);
-}
-
-P.pop = function() {
-    return this._ks.pop();
-}
-
-P.buf = function() {
-    return this._buf;
-}
-
-P.feed = function(buffer) {
-
-    // new data nom nom
-    // first: get a contiguous buffer, so we can try to continue.
-
-    if (buffer.length < 1) return;
-
-    if (!this._buf || this._buf.length == 0) {
-        this._buf = buffer;
+(function(ParserClass) {
+    var P = ParserClass.prototype = new EventEmitter();
+    
+    P.emitTerm = function(value) {
+        this.emit('term', value);
     }
-    else {
-        var bytesLeft = this._buf.length;
-        // we need a new buffer at least this._buf - this._pos + buffer.size.
-        // we'll just create a new one and let the old one
-        // be collected
-        var sizeNeeded = bytesLeft + buffer.length;
-        var buf = new Buffer(sizeNeeded);
-        this._buf.copy(buf, 0, 0);
-        buffer.copy(buf, bytesLeft, 0);
-        this._buf = buf;
+    
+    P.advance = function(numBytes) {
+        this._buf = this._buf.slice(numBytes, this._buf.length);
     }
-
-    // kont :: parser x value -> value
-    // parse :: parser x kont -> value
-
-    function emitVal(parser, val) {
-        return parse_term(parser, function(parser, val) {
-            parser.emitTerm(val);
-            return null;
-        });
+    
+    P.available = function() {
+        return this._buf.length;
     }
-
-    while (true) {
-        debug("(stack depth: " + this._ks.length + ")");
-        var next = this.pop() || emitVal;
-        debug("Continuation: ");
-        debug(next.toString());
-        try {
-            var val = next(this, this._val);
-            debug("Value: " + val);
-            this._val = val;
+    
+    P.push = function(k) {
+        this._ks.push(k);
+    }
+    
+    P.pop = function() {
+        return this._ks.pop();
+    }
+    
+    P.buf = function() {
+        return this._buf;
+    }
+    
+    P._ensureBuffer = function(buffer) {
+        if (buffer.length < 1) return;
+        
+        if (!this._buf || this._buf.length == 0) {
+            this._buf = buffer;
         }
-        catch (maybeKont) {
-            if (typeof(maybeKont) == 'function') {
-                this.push(maybeKont);
-                debug("thrown k");
-                return;
+        else {
+            var bytesLeft = this._buf.length;
+            // we need a new buffer at least this._buf - this._pos + buffer.size.
+            // we'll just create a new one and let the old one
+            // be collected
+            var sizeNeeded = bytesLeft + buffer.length;
+            var buf = new Buffer(sizeNeeded);
+            this._buf.copy(buf, 0, 0);
+            buffer.copy(buf, bytesLeft, 0);
+            this._buf = buf;
+        }
+    }
+
+    P._parse = function(topK) {
+        while (true) {
+            debug("(stack depth: " + this._ks.length + ")");
+            var next = this.pop() || topK;
+            debug("Continuation: ");
+            debug(next.toString());
+            try {
+                var val = next(this, this._val);
+                debug("Value: " + val);
+                this._val = val;
             }
-            else {
-                throw maybeKont;
+            catch (maybeKont) {
+                if (typeof(maybeKont) == 'function') {
+                    this.push(maybeKont);
+                    debug("thrown k");
+                    return;
+            }
+                else {
+                    throw maybeKont;
+                }
             }
         }
     }
-}
+
+    P.feed = function(buffer) {
+        
+        // new data nom nom
+        // first: get a contiguous buffer, so we can try to continue.
+        this._ensureBuffer(buffer);
+
+        // kont :: parser x value -> value
+
+        function emitVal(parser, val) {
+            return parse_term(parser, function(parser, val) {
+                parser.emitTerm(val);
+                return null;
+            });
+        }
+        this._parse(emitVal);
+    }
+})(TermParser);
 
 function read_simple_or_throw(parser, needed, read_fun, kont) {
     if (parser.available() < needed) {
