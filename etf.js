@@ -33,12 +33,17 @@ function buf_to_string(buf, start, end) {
     return str +'>>';
 }
 
+// shifting bits will give us signed ints
 function read_int(buf, offset, size) {
     var res = 0;
     for (var i = 0; i < size; i++) {
-        res += buf[offset+i] << (size - i - 1) * 8;
+        res += buf[offset+i] * Math.pow(256, size - i - 1);
     }
     return res;
+}
+
+function read_string(buf, offset, length) {
+    return buf.toString('ascii', offset, offset+length);
 }
 
 // Handy elsewhere
@@ -46,6 +51,7 @@ exports.write_int = write_int;
 exports.write_string = write_string;
 exports.buf_to_string = buf_to_string;
 exports.read_int = read_int;
+exports.read_string = read_string;
 
 // ** Parser
 
@@ -95,6 +101,11 @@ function TermParser() {
     
     P.emitTerm = function(value) {
         this.emit('term', value);
+    }
+
+    P.emitCommand = function(command, message) {
+        //message = message || 'undefined';
+        this.emit('command', {'command': command, 'message': message});
     }
     
     P.advance = function(numBytes) {
@@ -412,10 +423,42 @@ function parse_term(parser, kont) {
     }
 }
 
+function parse_dist_message(parser, kont) {
+    // 4 dist n m
+    if (parser.available() < 4) {
+        throw parse_dist_message;
+    }
+    var len = read_uint32(parser.buf());
+    parser.advance(4);
+    parser.push(kont);
+    parser.push(function(parser, header) {
+        parse_term(parser, function(parser, controlMessage) {
+            // controlMessage is supposed to be a tuple
+            var control = controlMessage.tuple[0];
+            switch (control) {
+            case SEND:
+            case REG_SEND:
+            case SEND_TT:
+            case REG_SEND_TT:
+                return parse_term(parser, function(parser, message) {
+                    return {'control': controlMessage, 'message': message};
+                });
+            default:
+                return {'control': controlMessage};
+            }
+        });
+    });
+    return parse_dist_header(parser);
+}
+
+function parse_dist_header(parser) {
+    // TODO
+}
+
 exports.TermParser = TermParser;
 
 /* Demo */
-
+/*
 var tp = new TermParser();
 tp.on('term', function(term) { console.log("Term: " + require('sys').inspect(term)); });
 
@@ -545,3 +588,4 @@ tp.feed(smallbig);
 var largebig = new Buffer([111, 0,0,0,4, 1, 12,0,0,0]);
 tp.feed(largebig);
 // -> Term: -12
+*/
