@@ -209,7 +209,7 @@ function TermParser() {
 
         function emitCommand(parser, val) {
             return parse_dist_message(parser, function(parser, val) {
-                parser.emitCommand(val);
+                if (null != val) parser.emitCommand(val);
                 return null;
             });
         }
@@ -485,11 +485,17 @@ def_command("MONITOR_P_EXIT", 21);
 function parse_dist_message(parser, kont) {
     // 4 dist n m
     if (parser.available() < 4) {
-        throw parse_dist_message;
+        throw function(parser) {
+            return parse_dist_message(parser, kont);
+        };
     }
     var len = read_uint32(parser.buf());
     debug("Message length: " + len);
     parser.advance(4);
+    // 0-length frames are sent (I think as heartbeats)
+    if (len == 0) {
+        return kont(parser, null);
+    }
     parser.push(kont);
     parser.push(function(parser, atomCache) {
         debug("Atom cache: " + require('sys').inspect(atomCache));
