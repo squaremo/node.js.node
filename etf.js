@@ -462,22 +462,25 @@ function parse_term(parser, kont) {
     }
 }
 
-var
-SEND = 1,
-LINK = 2,
-EXIT = 3,
-UNLINK = 4,
-NODE_LINK = 5,
-REG_SEND = 6,
-GROUP_LEADER = 7,
-EXIT2 = 8,
-SEND_TT = 12,
-EXIT_TT = 13,
-REG_SEND_TT = 16,
-EXIT2_TT = 18,
-MONITOR_P = 19,
-DEMONITOR_P = 20,
-MONITOR_P_EXIT = 21;
+var commands = {};
+function def_command(ind, command) {
+    commands[command] = ind; commands[ind] = command;
+}
+def_command("SEND", 1);
+def_command("LINK", 2);
+def_command("EXIT", 3);
+def_command("UNLINK", 4);
+def_command("NODE_LINK", 5);
+def_command("REG_SEND", 6);
+def_command("GROUP_LEADER", 7);
+def_command("EXIT2", 8);
+def_command("SEND_TT", 12);
+def_command("EXIT_TT", 13);
+def_command("REG_SEND_TT", 16);
+def_command("EXIT2_TT", 18);
+def_command("MONITOR_P", 19);
+def_command("DEMONITOR_P", 20);
+def_command("MONITOR_P_EXIT", 21);
 
 function parse_dist_message(parser, kont) {
     // 4 dist n m
@@ -495,11 +498,13 @@ function parse_dist_message(parser, kont) {
         return parse_term(parser, function(parser, controlMessage) {
             // controlMessage is supposed to be a tuple
             var control = controlMessage.tuple[0];
+            // patch in the string version
+            controlMessage.tuple[0] = commands[control];
             switch (control) {
-            case SEND:
-            case REG_SEND:
-            case SEND_TT:
-            case REG_SEND_TT:
+            case commands.SEND:
+            case commands.REG_SEND:
+            case commands.SEND_TT:
+            case commands.REG_SEND_TT:
                 return parse_term(parser, function(parser, message) {
                     return {'control': controlMessage, 'message': message};
                 });
