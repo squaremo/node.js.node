@@ -1,4 +1,3 @@
-// The aim here is to support the distribution protocol.
 
 var debug = function(str) {
 }
@@ -148,12 +147,17 @@ function Connection(node, stream) {
         }
         var counterchallenge = read_int(data, 3, 4);
         this._node.emit('connect', this._connected_node);
-        this._handle = emit;
+        this._parser = new etf.TermParser();
+        var self = this;
+        this._parser.on('command', function(command) {
+            self._node.emit('command', self._connected_node, command);
+        });
+        this._handle = parse;
         send_response(this._stream, this._node._cookie, counterchallenge);
     }
 
-    function emit(data) {
-        this._node.emit('data', data, this._connected_node);
+    function parse(data) {
+        this._parser.feed(data);
     }
     
     P.connect = function() {
@@ -219,8 +223,8 @@ var n = new Dist('node3', 12345, cookie);
 n.on('endConnection', function(stream) {
     connnection.log('End connection: ' + stream.remoteAddress);
 });
-n.on('data', function(data, from) {
-    console.log("From: "+from+": "+buf_to_string(data));
+n.on('command', function(from, data) {
+    console.log("From: "+from+": "+require('sys').inspect(data, false, null));
 });
 
 n.create();

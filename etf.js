@@ -94,6 +94,7 @@ function TermParser() {
     this._buf = null;
     this._ks = [];
     this._val = null;
+    this._atoms = {};
 }
 
 (function(ParserClass) {
@@ -102,10 +103,10 @@ function TermParser() {
     P.emitTerm = function(value) {
         this.emit('term', value);
     }
-
-    P.emitCommand = function(command, message) {
+    
+    P.emitCommand = function(val) {
         //message = message || 'undefined';
-        this.emit('command', {'command': command, 'message': message});
+        this.emit('command', val);
     }
     
     P.advance = function(numBytes) {
@@ -126,6 +127,25 @@ function TermParser() {
     
     P.buf = function() {
         return this._buf;
+    }
+    
+    P.atomIndexSet = function(entries) {
+        this._atomindex = entries;
+        for (var i = 0; i < entries.length; i++) {
+            var entry = entries[i];
+            var addr = (entry.segment << 8) | entry.index;
+            this._atoms[addr] = entry.atom;
+        }
+    }
+
+    P.atomIndexLookup = function(index) {
+        var entry = this._atomindex[index];
+        if (entry['new']) {
+            return entry.atom;
+        }
+        else {
+            return this._atoms[(entry.segment << 8) | entry.index];
+        }
     }
     
     P._ensureBuffer = function(buffer) {
@@ -149,10 +169,10 @@ function TermParser() {
 
     P._parse = function(topK) {
         while (true) {
-            debug("(stack depth: " + this._ks.length + ")");
+            //debug("(stack depth: " + this._ks.length + ")");
             var next = this.pop() || topK;
-            debug("Continuation: ");
-            debug(next.toString());
+            //debug("Continuation: ");
+            //debug(next.toString());
             try {
                 var val = next(this, this._val);
                 debug("Value: " + val);
@@ -161,10 +181,11 @@ function TermParser() {
             catch (maybeKont) {
                 if (typeof(maybeKont) == 'function') {
                     this.push(maybeKont);
-                    debug("thrown k");
+                    //debug("thrown k");
                     return;
-            }
+                }
                 else {
+                    debug("Fatal: " +maybeKont);
                     throw maybeKont;
                 }
             }
@@ -179,15 +200,23 @@ function TermParser() {
 
         // kont :: parser x value -> value
 
-        function emitVal(parser, val) {
+        function emitTerm(parser, val) {
             return parse_term(parser, function(parser, val) {
                 parser.emitTerm(val);
                 return null;
             });
         }
-        this._parse(emitVal);
+
+        function emitCommand(parser, val) {
+            return parse_dist_message(parser, function(parser, val) {
+                parser.emitCommand(val);
+                return null;
+            });
+        }
+        this._parse(emitCommand);
     }
 })(TermParser);
+
 
 function read_simple_or_throw(parser, needed, read_fun, kont) {
     if (parser.available() < needed) {
@@ -200,6 +229,7 @@ function read_simple_or_throw(parser, needed, read_fun, kont) {
         parser.push(kont);
         var val = read_fun(parser.buf());
         parser.advance(needed);
+        //debug("Simple: "+val);
         return val;
     }
 }
@@ -286,20 +316,20 @@ function parse_tuple(sizeSize, parser, kont) {
     }
     var size = read_int(parser.buf(), 0, sizeSize);
     parser.advance(sizeSize);
-
+    
+    debug("Tuple, size " + size);
     if (size==0) {
-        return kont({'tuple': [], 'length': 0});
+        return kont(parser, {'tuple': [], 'length': 0});
     }
     
     function read_rest_k(count, accum) {
-        debug("(count: "+count+"; accum:"+accum+")");
         return function(parser, val) {
+            debug("Tuple value: " + val);
+            accum.push(val);
             if (count==1) {
-                accum.push(val);
                 return {'tuple': accum, 'length': size};
             }
             else {
-                accum.push(val);
                 return parse_term(parser, read_rest_k(count-1, accum));
             };
         }
@@ -375,6 +405,13 @@ function parse_term(parser, kont) {
     parser.advance(1);
 
     switch (type) {
+    case ATOM_CACHE_REF:
+        return read_simple_or_throw(parser, 1, function(buf) {
+            var index = read_uint8(buf);
+            var lookedup = parser.atomIndexLookup(index);
+            debug("Atom lookup, index " + index + ", value '"+ lookedup+"'");
+            return lookedup;
+        }, kont);
     case SMALL_INTEGER_EXT:
         return read_simple_or_throw(parser, 1, read_uint8, kont);
     case INTEGER_EXT:
@@ -411,8 +448,10 @@ function parse_term(parser, kont) {
     case NEW_REFERENCE_EXT:
         return parse_new_ref(parser, kont);
     case SMALL_ATOM_EXT:
-    case ATOM_EXT:
         return parse_byte_sized(parser, 1,
+                               function(x){return x.toString()}, kont);
+    case ATOM_EXT:
+        return parse_byte_sized(parser, 2,
                                function(x){return x.toString()}, kont);
     case FUN_EXT:
     case NEW_FUN_EXT:
@@ -423,16 +462,37 @@ function parse_term(parser, kont) {
     }
 }
 
+var
+SEND = 1,
+LINK = 2,
+EXIT = 3,
+UNLINK = 4,
+NODE_LINK = 5,
+REG_SEND = 6,
+GROUP_LEADER = 7,
+EXIT2 = 8,
+SEND_TT = 12,
+EXIT_TT = 13,
+REG_SEND_TT = 16,
+EXIT2_TT = 18,
+MONITOR_P = 19,
+DEMONITOR_P = 20,
+MONITOR_P_EXIT = 21;
+
 function parse_dist_message(parser, kont) {
     // 4 dist n m
     if (parser.available() < 4) {
         throw parse_dist_message;
     }
     var len = read_uint32(parser.buf());
+    debug("Message length: " + len);
     parser.advance(4);
     parser.push(kont);
-    parser.push(function(parser, header) {
-        parse_term(parser, function(parser, controlMessage) {
+    parser.push(function(parser, atomCache) {
+        debug("Atom cache: " + require('sys').inspect(atomCache));
+        parser.atomIndexSet(atomCache);
+
+        return parse_term(parser, function(parser, controlMessage) {
             // controlMessage is supposed to be a tuple
             var control = controlMessage.tuple[0];
             switch (control) {
@@ -451,17 +511,129 @@ function parse_dist_message(parser, kont) {
     return parse_dist_header(parser);
 }
 
+// <<0,0,0,113, % length
+//   131,68,5, % dist version and atom cache length
+//   137,222,9, % atom cache flags (5 / 2 + 1)
+//   37,10,110,101,116,95,107,101,114,110,101,108,5,0,109,9,104,101,108,108,111,64,99,105,100,146,7,105,115,95,97,117,116,104,136,9,36,103,101,110,95,99,97,108,108,104,4,97,6,103,82,2,0,0,1,27,0,0,0,0,1,82,1,82,0,104,3,82,4,104,2,103,82,2,0,0,1,27,0,0,0,0,1,114,0,3,82,2,1,0,0,3,153,0,0,0,0,0,0,0,0,104,2,82,3,82,2>>
 function parse_dist_header(parser) {
-    // TODO
+    if (parser.available() < 3) {
+        throw parse_dist_header;
+    }
+    var eq131then68 = read_int(parser.buf(), 0, 2);
+    if ((eq131then68 >>> 8) != 131 ||
+        (eq131then68 & 0xff) != 68) {
+        throw "Expected bytes <<131, 68>>, got "+ eq131then68;
+    }
+    // Now, atom cache flags, 4 bits for each cache ref
+    // plus 4 bits for overall (long atoms flag, effectively)
+    var aclen = read_int(parser.buf(), 2, 1);
+    parser.advance(3);
+    // Just jump; this isn't going to be nested
+    if (aclen > 0) {
+        return parse_atom_cache(parser, aclen);
+    }
+    else {
+        return [];
+    }
+}
+
+function parse_atom_cache(parser, num) {
+    var flagsLen = Math.floor(num / 2) + 1;
+    if (parser.available() < flagsLen) {
+        throw function(parser, value) {
+            return parse_atom_cache(parser, num);
+        };
+    }
+    
+    var buf = parser.buf();
+    var entries = [];
+    for (var i=0; i < num; i++) {
+        var f =  buf[Math.floor(i/2)];
+        f = (i % 2 == 0) ? f & 0x0f : f >>> 4;
+        entries[i] = {'new': f & 0x08, 'segment': f & 0x07};
+    }
+    var last = buf[flagsLen - 1];
+    // if the num is even, the last index will be odd
+    // and so the "overall" flags will be in the least sig
+    //  bits; otherwise, most sig bits. 
+    last = (num % 2 == 0) ? last & 0x0f : last >>> 4;
+    debug("Last: " + last)
+    var atomLenSize = (last & 0x01) ? 2 : 1;
+    
+    parser.advance(flagsLen);
+
+    // FIXME hideous mutation
+    // We cheat rather a lot here by mutating the entries,
+    // and returning it knowing that if we're not done
+    // we'll be given it back again.
+    function read_rest_k(i) {
+        return function(parser) {
+            if (i < num) {
+                var entry = entries[i];
+                if (entry['new'] != 0) {
+                    debug("New atom");
+                    if (parser.available() < atomLenSize + 1) {
+                        throw read_rest_k(i);
+                    }
+                    entry['index'] = read_int(parser.buf(), 0, 1);
+                    var len = read_int(parser.buf(), 1, atomLenSize);
+                    debug("atom len " + len);
+                    if (parser.available() < (len + atomLenSize + 1)) {
+                        throw read_rest_k(i);
+                    }
+                    var atom = read_string(parser.buf(), atomLenSize + 1, len);
+                    entry['atom'] = atom;
+                    parser.advance(atomLenSize + 1 + len);
+                }
+                else {
+                    if (parser.available() < 1) {
+                        throw read_rest_k(i);
+                    }
+                    entry['index'] = read_int(parser.buf(), 0, 1);
+                    parser.advance(1);
+                }
+                parser.push(read_rest_k(i + 1));
+                return entries;
+            }
+            else {
+                debug(" All done ");
+                return entries;
+            }
+        }
+    }
+    return read_rest_k(0)(parser);
 }
 
 exports.TermParser = TermParser;
 
 /* Demo */
+
+// Command parsing
+
+/*
+var com = new Buffer(
+    [0,0,0,113, // length
+     131,68,5, // dist version and atom cache length
+     137,222,9, // atom cache flags (5 / 2 + 1)
+     37,10,110,101,116,95,107,101,114,110,101,108,5,0,109,9,104,101,108,108,111,
+     64,99,105,100,146,7,105,115,95,97,117,116,104,136,9,36,103,101,110,95,99,97,
+     108,108,104,4,97,6,103,82,2,0,0,1,27,0,0,0,0,1,82,1,82,0,104,3,82,4,104,2,
+     103,82,2,0,0,1,27,0,0,0,0,1,114,0,3,82,2,1,0,0,3,153,0,0,0,0,0,0,0,0,104,2,
+     82,3,82,2]);
+
+var cp = new TermParser();
+cp.on('command', function(command) {
+    console.log("Command: " + require('sys').inspect(command, false, 0));
+});
+
+cp.feed(com);
+*/
+
 /*
 var tp = new TermParser();
 tp.on('term', function(term) { console.log("Term: " + require('sys').inspect(term)); });
 
+/*
 var seven = new Buffer([97, 7]);
 
 tp.feed(seven);
@@ -515,6 +687,7 @@ tp.feed(improper);
 var nested = new Buffer([108, 0,0,0,2, 97,6, 108, 0,0,0,1, 97,7, 106, 106]);
 tp.feed(nested);
 // -> Term: [6, [7]]
+
 
 // Tuples
 var small = new Buffer([104, 3, 97,1, 97,2, 97,3]);

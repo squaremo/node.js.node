@@ -1,3 +1,12 @@
+
+var debug = function(str) {
+}
+if (process.env.DEBUG) {
+    debug = function(str) {
+        console.log(str);
+    }
+}
+
 var net = require('net');
 var buffer = require('buffer');
 
@@ -13,10 +22,6 @@ write_int = codec.write_int,
 write_string = codec.write_string,
 buf_to_string = codec.buf_to_string,
 read_int = codec.read_int;
-
-function debug(prefix, buf, start, end) {
-    console.log(prefix + ' ' + buf_to_string(buf, start, end));
-}
 
 function EPMD(host, port) {
 
